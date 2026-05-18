@@ -145,3 +145,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# Usage: python download_wildrgbd.py --cat all --path "dataset/destination/path"
