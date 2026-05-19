@@ -3,58 +3,114 @@
 # Original license: MIT License
 # Copyright (c) 2024 rowdataset
 
-import os 
+import os
 import subprocess
 import argparse
 import random
 import shutil
 
 
-def prune_category(cat):
-    cpath = os.path.join('dataset', cat)
+def select_views(rgbs, depths, cam_poses, num_views, view_cone_range=(None, None)):
+    view_cone_range = [len(rgbs) - 1 if v is None else v for v in view_cone_range]
     
+    items = list(zip(rgbs, depths, cam_poses))
+    sources = [items[v % len(rgbs)] for v in view_cone_range]
+    
+    view_cone_range = (view_cone_range[0] + 1) % len(rgbs), (view_cone_range[1] - 1) % len(rgbs)
+    
+    if view_cone_range[1] < view_cone_range[0]:
+        targets = items[view_cone_range[0]:] + items[:view_cone_range[1]]
+    else:
+        targets = items[view_cone_range[0]:view_cone_range[1]]
+    targets = list(enumerate(targets))
+    targets = random.sample(targets, num_views - 2)
+    targets.sort(key=lambda x: x[0])
+    targets = [e for _, e in targets]
+    
+    items = [sources[0]] + targets + [sources[1]]
+    return list(zip(*items))
+
+
+def process_cone(cpath, cone):
+    depths, rgbs, cam_poses = cone
+    
+    for d, r in zip(depths, rgbs):
+        rpath = os.path.join(cpath, 'rgb')
+        cpath = os.path.join(cpath, 'depth')
+        os.makedirs(rpath, exist_ok=True)
+        os.makedirs(cpath, exist_ok=True)
+        rpath = os.path.join(rpath, os.path.split(r)[1])
+        cpath = os.path.join(cpath, os.path.split(d)[1])
+        shutil.copy2(r, rpath)
+        shutil.copy2(d, cpath)
+        
+    with open(os.path.join(cpath, 'cam_poses.txt'), 'w', encoding='utf8') as f:
+        f.write('\n'.join(cam_poses))
+
+
+def process_scene(spath, num_view_cones, view_cone_range, num_views):
+    rgb_path, depth_path, cam_poses_path = [os.path.join(spath, p) for p in ('rgb', 'depth', 'cam_poses.txt')]
+    
+    rgbs, depths = [sorted([os.path.join(spath, p, i) for i in os.listdir(p)]) for p in (rgb_path, depth_path)]
+    with open(cam_poses_path, 'r', encoding='utf8') as f:
+        cam_poses = f.read().strip().split('\n')
+    
+    indices, depth_indices = [sorted([int(i.split('.')[0]) for i in os.listdir(p)]) for p in (rgb_path, depth_path)]
+    cam_pose_indices = [int(l.split()[0]) for l in cam_poses]
+    
+    if not (indices == depth_indices == cam_pose_indices):
+        print(f'Inconsistency in dataset paths found at "{spath}", skipping scene')
+        shutil.rmtree(spath)
+        return False
+    
+    cone_indices = random.sample(indices, num_view_cones)
+    cone_indices = [(i, (i + random.randint(*view_cone_range))) for i in cone_indices]
+    cones = [select_views(rgbs, depths, cam_poses, num_views, v) for v in cone_indices]
+    
+    for i, cone in enumerate(cones):
+        cpath = os.path.join(spath, 'cones', str(i))
+        process_cone(cpath, cone)
+    
+    shutil.rmtree(rgb_path)
+    shutil.rmtree(depth_path)
+    os.remove(cam_poses_path)
+    shutil.rmtree(os.path.join(spath, 'masks'))
+    
+    return True
+
+
+def process_category(cpath, num_view_cones, view_cone_range, num_views):
+    failed = []
     for s in os.listdir(os.path.join(cpath, 'scenes')):
         spath = os.path.join(cpath, 'scenes', s)
-        indices = list(range(len(os.listdir(os.path.join(spath, 'depth')))))
-        depths, rgbs = [sorted([os.path.join(spath, p, i) for i in os.listdir(os.path.join(spath, p))]) for p in ('depth', 'rgb')]
-        
-        with open(os.path.join(spath, 'cam_poses.txt'), 'r', encoding='utf8') as f:
-            cam_poses = f.read().strip().split('\n')
-        
-        split = 30 # chooses n imgs
-        random.shuffle(indices)
-        indices, indices_del = sorted(indices[:split]), sorted(indices[split:])
-        
-        for p in (depths, rgbs):
-            for i in indices_del:
-                os.remove(p[i])
-        
-        shutil.rmtree(os.path.join(spath, 'masks'))
-        
-        cam_poses = [cam_poses[i] for i in indices]
-
-        with open(os.path.join(spath, 'cam_poses.txt'), 'w', encoding='utf8') as f:
-            f.write('\n'.join(cam_poses))
+        success = process_scene(spath, num_view_cones, view_cone_range, num_views)
+        if not success:
+            failed.append(spath)
+    
+    return failed
 
 
-def download_category(path, categories, cat):
+def download_category(path, categories, cat, num_view_cones, view_cone_range, num_views):
+    cpath = os.path.join(path, cat)
     cat_path = os.path.join(path, f'{cat}.zip')
     cat_single_path = os.path.join(path, f'{cat}-single.zip')
-
+    
     for file in categories[cat]:
-        subprocess.run(f'wget https://huggingface.co/hongchi/wildrgbd/resolve/main/{file}?download=true -O {file}', shell=True)
-
+        fpath = os.path.join(path, file)
+        subprocess.run(f'wget https://huggingface.co/hongchi/wildrgbd/resolve/main/{file}?download=true -O {fpath}', shell=True)
+    
     if len(categories[cat]) > 1:
         subprocess.run(f'zip -F {cat_path} --out {cat_single_path}', shell=True)
         subprocess.run(f'unzip {cat_single_path} -d "{path}"', shell=True)
         subprocess.run(f'rm {cat_single_path}', shell=True)
         for file in categories[cat]:
-            subprocess.run(f'rm {file}', shell=True)
+            fpath = os.path.join(path, file)
+            subprocess.run(f'rm {fpath}', shell=True)
     else:
         subprocess.run(f'unzip {cat_path} -d "{path}"', shell=True)
         subprocess.run(f'rm {cat_path}', shell=True)
-
-    prune_category(cat)
+        
+    return process_category(cpath, num_view_cones, view_cone_range, num_views)
 
 
 def main():
@@ -62,10 +118,10 @@ def main():
     parser.add_argument("--path", type=str, required=True)
     parser.add_argument("--cat", type=str, required=True)
     args = parser.parse_args()
-
+    
     cat = args.cat
     path = args.path
-
+    
     categories = {
     'bottle': ['bottle.z01', 'bottle.z02', 'bottle.zip'],
     'cup': ['cup.z01', 'cup.z02', 'cup.z03', 'cup.zip'],
@@ -114,14 +170,28 @@ def main():
     'plane': ['plane.zip'],
     'car': ['car.zip'],
     }
-
+    
+    assert cat == 'all' or categories.get(cat, False), f'Invalid category "{cat}"'
+    
+    # TODO
+    # Just randomly samples views
+    # num_view_cones = 1
+    # view_cone_range = (None, None)
+    # num_views = 60
+    
+    # Creates multiple cone samples
+    num_view_cones = 6
+    view_cone_range = (40, 70) # min and max sizes for cone range
+    num_views = 10 # num views per cone
+    
     os.makedirs(path, exist_ok=True)
-    categories_path = os.path.join(path, 'categories.txt')
-
+    download_progress_path = os.path.join(path, 'download_progress.txt')
+    
+    failed = []
     if cat == 'all':
         categories_list = sorted(list(categories.keys()))
-        if os.path.exists(categories_path):
-            with open(categories_path, 'r', encoding='utf8') as f:
+        if os.path.exists(download_progress_path):
+            with open(download_progress_path, 'r', encoding='utf8') as f:
                 curr_cat = f.read()
             
             try:
@@ -131,16 +201,26 @@ def main():
         
         for cat in categories_list:
             print(f'\nDownloading `{cat}`...\n')
-            with open(categories_path, 'w', encoding='utf8') as f:
+            with open(download_progress_path, 'w', encoding='utf8') as f:
                 f.write(cat)
-
-            download_category(path, categories, cat)
+            
+            cat_failed = download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
+            failed.extend(cat_failed)
         
-        os.remove(categories_path)
-        print('Dataset downloaded')
-                
+        os.remove(download_progress_path)
+    
     else:
-        download_category(path, categories, cat)
+        failed = download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
+    
+    if len(failed) > 0:
+        print('\nScenes that failed:')
+        for s in failed:
+            print(s)
+        
+        with open(os.path.join(path, 'failed.txt'), 'w', encoding='utf8') as f:
+            f.write('\n'.join(failed))
+    
+    print('\nDataset downloaded')
 
 
 if __name__ == '__main__':
