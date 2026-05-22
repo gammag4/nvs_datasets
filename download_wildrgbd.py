@@ -32,24 +32,27 @@ def select_views(rgbs, depths, cam_poses, num_views, view_cone_range=(None, None
 
 
 def process_cone(cpath, cone):
-    depths, rgbs, cam_poses = cone
+    rgbs, depths, cam_poses = cone
     
-    for d, r in zip(depths, rgbs):
-        rpath = os.path.join(cpath, 'rgb')
-        cpath = os.path.join(cpath, 'depth')
-        os.makedirs(rpath, exist_ok=True)
-        os.makedirs(cpath, exist_ok=True)
-        rpath = os.path.join(rpath, os.path.split(r)[1])
-        cpath = os.path.join(cpath, os.path.split(d)[1])
-        shutil.copy2(r, rpath)
-        shutil.copy2(d, cpath)
-        
+    for r, d in zip(rgbs, depths):
+        for p, c in ((r, 'rgb'), (d, 'depth')):
+            rpath = os.path.join(cpath, c)
+            os.makedirs(rpath, exist_ok=True)
+            rpath = os.path.join(rpath, os.path.split(p)[1])
+            shutil.copy2(p, rpath)
+    
     with open(os.path.join(cpath, 'cam_poses.txt'), 'w', encoding='utf8') as f:
         f.write('\n'.join(cam_poses))
 
 
 def process_scene(spath, num_view_cones, view_cone_range, num_views):
+    print(f'Processing scene  "{spath}"...')
     rgb_path, depth_path, cam_poses_path = [os.path.join(spath, p) for p in ('rgb', 'depth', 'cam_poses.txt')]
+    
+    if [os.path.exists(p) for p in (rgb_path, depth_path, cam_poses_path)] != [True, True, True]:
+        print(f'Inconsistency in dataset paths found at "{spath}", skipping scene')
+        shutil.rmtree(spath)
+        return False
     
     rgbs, depths = [sorted([os.path.join(spath, p, i) for i in os.listdir(p)]) for p in (rgb_path, depth_path)]
     with open(cam_poses_path, 'r', encoding='utf8') as f:
@@ -87,7 +90,9 @@ def process_category(cpath, num_view_cones, view_cone_range, num_views):
         if not success:
             failed.append(spath)
     
-    return failed
+    if len(failed) > 0:
+        with open(os.path.join(cpath, 'failed_scenes.txt'), 'w', encoding='utf8') as f:
+            f.write('\n'.join(failed))
 
 
 def download_category(path, categories, cat, num_view_cones, view_cone_range, num_views):
@@ -110,7 +115,7 @@ def download_category(path, categories, cat, num_view_cones, view_cone_range, nu
         subprocess.run(f'unzip {cat_path} -d "{path}"', shell=True)
         subprocess.run(f'rm {cat_path}', shell=True)
         
-    return process_category(cpath, num_view_cones, view_cone_range, num_views)
+    process_category(cpath, num_view_cones, view_cone_range, num_views)
 
 
 def main():
@@ -187,7 +192,6 @@ def main():
     os.makedirs(path, exist_ok=True)
     download_progress_path = os.path.join(path, 'download_progress.txt')
     
-    failed = []
     if cat == 'all':
         categories_list = sorted(list(categories.keys()))
         if os.path.exists(download_progress_path):
@@ -200,17 +204,23 @@ def main():
                 pass
         
         for cat in categories_list:
-            print(f'\nDownloading `{cat}`...\n')
+            print(f'\nDownloading category "{cat}"...\n')
             with open(download_progress_path, 'w', encoding='utf8') as f:
                 f.write(cat)
             
-            cat_failed = download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
-            failed.extend(cat_failed)
+            download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
         
         os.remove(download_progress_path)
     
     else:
-        failed = download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
+        download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
+    
+    failed = []
+    for cat in categories_list:
+        failed_path = os.path.join(path, cat, 'failed_scenes.txt')
+        if os.path.isfile(failed_path):
+            with open(failed_path, 'r', encoding='utf8') as f:
+                failed.extend(f.read().split('\n'))
     
     if len(failed) > 0:
         print('\nScenes that failed:')
