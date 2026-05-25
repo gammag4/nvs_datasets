@@ -100,17 +100,18 @@ def download_category(path, categories, cat, num_view_cones, view_cone_range, nu
     cat_path = os.path.join(path, f'{cat}.zip')
     cat_single_path = os.path.join(path, f'{cat}-single.zip')
     
-    for file in categories[cat]:
-        fpath = os.path.join(path, file)
-        subprocess.run(f'wget https://huggingface.co/hongchi/wildrgbd/resolve/main/{file}?download=true -O {fpath}', shell=True)
+    if not os.path.exists(cat_single_path):
+        for file in categories[cat]:
+            fpath = os.path.join(path, file)
+            subprocess.run(f'wget -c https://huggingface.co/hongchi/wildrgbd/resolve/main/{file}?download=true -O {fpath}', shell=True)
     
     if len(categories[cat]) > 1:
         subprocess.run(f'zip -F {cat_path} --out {cat_single_path}', shell=True)
-        subprocess.run(f'unzip {cat_single_path} -d "{path}"', shell=True)
-        subprocess.run(f'rm {cat_single_path}', shell=True)
         for file in categories[cat]:
             fpath = os.path.join(path, file)
             subprocess.run(f'rm {fpath}', shell=True)
+        subprocess.run(f'unzip {cat_single_path} -d "{path}"', shell=True)
+        subprocess.run(f'rm {cat_single_path}', shell=True)
     else:
         subprocess.run(f'unzip {cat_path} -d "{path}"', shell=True)
         subprocess.run(f'rm {cat_path}', shell=True)
@@ -175,6 +176,7 @@ def main():
     'plane': ['plane.zip'],
     'car': ['car.zip'],
     }
+    categories_list = sorted(list(categories.keys()))
     
     assert cat == 'all' or categories.get(cat, False), f'Invalid category "{cat}"'
     
@@ -193,7 +195,6 @@ def main():
     download_progress_path = os.path.join(path, 'download_progress.txt')
     
     if cat == 'all':
-        categories_list = sorted(list(categories.keys()))
         if os.path.exists(download_progress_path):
             with open(download_progress_path, 'r', encoding='utf8') as f:
                 curr_cat = f.read()
@@ -211,7 +212,6 @@ def main():
             download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
         
         os.remove(download_progress_path)
-    
     else:
         download_category(path, categories, cat, num_view_cones, view_cone_range, num_views)
     
