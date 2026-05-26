@@ -195,16 +195,17 @@ def main():
     download_progress_path = os.path.join(path, 'download_progress.txt')
     
     if cat == 'all':
+        categories_list2 = categories_list[:]
         if os.path.exists(download_progress_path):
             with open(download_progress_path, 'r', encoding='utf8') as f:
                 curr_cat = f.read()
             
             try:
-                categories_list = categories_list[categories_list.index(curr_cat):]
+                categories_list2 = categories_list2[categories_list2.index(curr_cat):]
             except ValueError:
                 pass
         
-        for cat in categories_list:
+        for cat in categories_list2:
             print(f'\nDownloading category "{cat}"...\n')
             with open(download_progress_path, 'w', encoding='utf8') as f:
                 f.write(cat)
